@@ -1,0 +1,142 @@
+services:
+  producer:
+    build:
+      context: ./productor
+      dockerfile: Dockerfile
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - BATCH_SIZE=4
+      - FPS_LIMIT=10
+      - KAFKA_BROKER=broker:29092
+      - RTSP_USERNAME_FILE=/run/secrets/rtsp_username
+      - RTSP_PASSWORD_FILE=/run/secrets/rtsp_password
+    secrets:
+      - rtsp_username
+      - rtsp_password
+    volumes:
+      - ./productor/scripts:/app
+      - ./secrets:/run/secrets:ro
+    command: python3 productor.py # Formato array recomendado
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  python-transmision:
+    build:
+      context: ./python-transmision
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    depends_on:
+      - broker
+      - rtsp-server
+    volumes:
+      - ./python-transmision/scripts:/app
+    command: python transmision.py
+    networks:
+      - link
+
+  python-alertas:
+    build:
+      context: ./python-alertas
+      dockerfile: Dockerfile
+    depends_on:
+      - broker
+    volumes:
+      - ./python-alertas/scripts:/app
+    networks:
+      - link
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - link
+
+  broker:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: broker
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_JMX_PORT: 9101
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    networks:
+      - link
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "localhost:29092"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  rtsp-server:
+    image: bluenviron/mediamtx:latest
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+      - "8888:8888"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    networks:
+      - link
+
+  go2rtc:
+    image: alexxit/go2rtc
+    ports:
+      - "1984:1984"
+    volumes:
+      - ./go2rtc-config/go2rtc.yaml:/config/go2rtc.yaml
+    networks:
+      - link
+
+  influxdb:
+    image: influxdb:latest
+    ports:
+      - "8086:8086"
+    env_file:
+      - ./conf/variables.env
+    volumes:
+      - ./data/influxdb:/var/lib/influxdb
+    networks:
+      - link
+
+  grafana:
+    build: ./grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    networks:
+      - link
+
+volumes:
+  grafana_data:
+
+networks:
+  link:
+    driver: bridge
+
+secrets:
+  rtsp_username:
+    file: ./secrets/rtsp_username
+  rtsp_password:
+    file: ./secrets/rtsp_password

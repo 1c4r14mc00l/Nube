@@ -1,0 +1,4 @@
+ultralytics
+opencv-python  # ← Corrige esto (no "nopencv-python")
+kafka-python
+torch
